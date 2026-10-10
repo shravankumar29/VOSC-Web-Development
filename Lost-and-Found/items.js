@@ -15,6 +15,64 @@ const getToday = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+const cleanText = s => String(s ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+
+function textDistance(a, b){
+  if(a === b) return 0;
+  if(!a.length) return b.length;
+  if(!b.length) return a.length;
+  const row = Array.from({length: a.length + 1}, (_, i) => i);
+  for(let i = 1; i <= b.length; i++){
+    let prev = row[0]; row[0] = i;
+    for(let j = 1; j <= a.length; j++){
+      const temp = row[j];
+      row[j] = b[i - 1] === a[j - 1] ? prev : Math.min(prev + 1, row[j] + 1, row[j - 1] + 1);
+      prev = temp;
+    }
+  }
+  return row[a.length];
+}
+
+function isSimilarName(a, b){
+  const s1 = cleanText(a), s2 = cleanText(b);
+  if(!s1 || !s2) return false;
+  if(s1 === s2) return true;
+  const minLen = Math.min(s1.length, s2.length);
+  const maxLen = Math.max(s1.length, s2.length);
+  if(minLen >= 4 && (s1.includes(s2) || s2.includes(s1))) return true;
+  const dist = textDistance(s1, s2);
+  return dist <= 2 && (1 - dist / maxLen) >= 0.75;
+}
+
+function isSimilarPlace(a, b){
+  const s1 = cleanText(a), s2 = cleanText(b);
+  if(!s1 || !s2) return false;
+  if(s1 === s2) return true;
+  const minLen = Math.min(s1.length, s2.length);
+  if(minLen >= 4 && (s1.includes(s2) || s2.includes(s1))) return true;
+  return textDistance(s1, s2) <= 2;
+}
+
+function isCloseDate(d1, d2, maxDays = 2){
+  if(!d1 || !d2) return false;
+  if(d1 === d2) return true;
+  const t1 = new Date(d1 + "T00:00:00").getTime();
+  const t2 = new Date(d2 + "T00:00:00").getTime();
+  if(isNaN(t1) || isNaN(t2)) return false;
+  return Math.abs(t1 - t2) / (1000 * 60 * 60 * 24) <= maxDays;
+}
+
+function findDuplicateReport(newItem, excludeId){
+  return getItems().find(item => {
+    if(excludeId && item.id === excludeId) return false;
+    if(item.type !== newItem.type) return false;
+    if(!isSimilarName(item.name, newItem.name)) return false;
+    if(!isSimilarPlace(item.place, newItem.place)) return false;
+    if(!isCloseDate(item.date, newItem.date)) return false;
+    return true;
+  });
+}
+
 function requireUser(){
   if(!user()){ location.href="login.html"; return false; }
   return true;
@@ -117,8 +175,17 @@ function initReport(){
   const form=document.getElementById("reportForm");if(!form)return;
   const itemDate = document.getElementById("itemDate");
   itemDate.max = getToday();
-  const params=new URLSearchParams(location.search),editId=params.get("edit"),existing=editId?getItems().find(x=>x.id===editId&&x.reportedBy===user().email):null,type=(existing?existing.type:params.get("type")==="found"?"found":"lost");
-  if(editId&&!existing){location.href="my-reports.html";return;}
+  let bypassDuplicate = false;
+  [itemName, itemDate, itemPlace, itemDescription].forEach(el => {
+    if(el) el.addEventListener("input", () => {
+      bypassDuplicate = false;
+      const m = document.getElementById("reportMessage");
+      if(m && m.querySelector(".duplicate-warning")) m.innerHTML = "";
+    });
+  });
+  const params=new URLSearchParams(location.search),editId=params.get("edit"),currentUser=user(),targetItem=editId?getItems().find(x=>x.id===editId):null;
+  if(editId&&(!targetItem||!currentUser||targetItem.reportedBy!==currentUser.email)){location.href="my-reports.html";return;}
+  const existing=targetItem,type=(existing?existing.type:params.get("type")==="found"?"found":"lost");
   document.getElementById("reportTitle").textContent=existing?`Edit your ${type} report`:`Report a ${type} item`;
   document.getElementById("reportEyebrow").textContent=existing?"EDIT REPORT":type==="lost"?"REPORT LOST ITEM":"REPORT FOUND ITEM";
   if(existing){
@@ -150,6 +217,34 @@ function initReport(){
     }
     if (itemDate.value > getToday()) { msg.textContent = "Date cannot be in the future."; return; }
     if(file&&file.size>MAX_FILE_SIZE){msg.textContent="File is too large. Maximum size is 10 MB.";return;}
+    if(existing){
+      const currentU=user();
+      const currentItem=getItems().find(x=>x.id===existing.id);
+      if(!currentItem||!currentU||currentItem.reportedBy!==currentU.email){
+        msg.textContent="You do not have permission to edit this report.";
+        return;
+      }
+    }
+
+    if(!bypassDuplicate){
+      const potentialDup=findDuplicateReport({
+        type,
+        name: itemName.value.trim(),
+        place: itemPlace.value.trim(),
+        date: itemDate.value
+      }, existing?.id);
+      if(potentialDup){
+        msg.innerHTML = `<div class="duplicate-warning" style="background:#fffbe6;border:1px solid #ffe58f;border-radius:12px;padding:14px;color:var(--ink);margin:10px 0;text-align:left;"><div style="font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;color:#d46b08;">⚠️ Potential duplicate report found</div><p style="margin:0 0 12px;font-size:12px;color:var(--muted);line-height:1.4;">A matching ${esc(potentialDup.type)} report for <strong>"${esc(potentialDup.name)}"</strong> at <strong>"${esc(potentialDup.place)}"</strong> (${esc(fmt(potentialDup.date))}) already exists.</p><div style="display:flex;gap:8px;flex-wrap:wrap;"><a href="item-details.html?id=${encodeURIComponent(potentialDup.id)}" target="_blank" class="btn btn-secondary btn-sm" style="font-size:12px;text-decoration:none;">View existing report ↗</a><button type="button" id="continueDuplicateBtn" class="btn btn-primary btn-sm" style="font-size:12px;">Publish anyway →</button></div></div>`;
+        const continueBtn = document.getElementById("continueDuplicateBtn");
+        if(continueBtn){
+          continueBtn.onclick = () => {
+            bypassDuplicate = true;
+            button.click();
+          };
+        }
+        return;
+      }
+    }
     button.disabled=true;button.textContent="Publishing…";
     try{
       const id=existing?existing.id:(crypto.randomUUID?crypto.randomUUID():Date.now().toString());
@@ -159,11 +254,16 @@ function initReport(){
         await saveFile(fileId,file);
         fileName=file.name;fileType=file.type;fileSize=file.size;
       }
-      const item={id,type,name:itemName.value.trim(),description:itemDescription.value.trim(),date:itemDate.value,place:itemPlace.value.trim(),contact:itemContact.value.trim(),fileId,fileName,fileType,fileSize,image:existing?.image||"",reportedBy:user().email,reporterName:user().name,status:existing?.status||"active",createdAt:existing?.createdAt||Date.now()};
+      const item={id,type,name:itemName.value.trim(),description:itemDescription.value.trim(),date:itemDate.value,place:itemPlace.value.trim(),contact:itemContact.value.trim(),fileId,fileName,fileType,fileSize,image:existing?.image||"",reportedBy:existing?existing.reportedBy:user().email,reporterName:existing?existing.reporterName:user().name,status:existing?.status||"active",createdAt:existing?.createdAt||Date.now()};
       const items=getItems();
       if(existing){
-        const idx=items.findIndex(x=>x.id===existing.id);
+        const idx=items.findIndex(x=>x.id===existing.id&&x.reportedBy===user()?.email);
         if(idx>=0)items[idx]=item;
+        else{
+          msg.textContent="You do not have permission to edit this report.";
+          button.disabled=false;button.textContent="Publish report →";
+          return;
+        }
       }else items.unshift(item);
       saveItems(items);
       location.href=existing?"my-reports.html":"items.html";
@@ -186,9 +286,10 @@ async function initDetails(){
     const url=URL.createObjectURL(file.blob);objectUrls.push(url);
     photo=(file.type||"").startsWith("image/")?`<img src="${url}" alt="${esc(i.name)}">`:`<div class="file-detail"><div>📎</div><strong>${esc(file.name)}</strong><small>${esc(formatBytes(file.size))}</small><a class="btn btn-secondary" href="${url}" download="${esc(file.name)}">Download file</a></div>`;
   }else if(i.image) photo=`<img src="${i.image}" alt="${esc(i.name)}">`;
-  box.innerHTML=`<div class="detail-grid"><div class="detail-photo">${photo}</div><div class="detail-info"><div class="detail-top"><span class="pill ${i.type}">${i.type.toUpperCase()}</span><span class="status ${i.status}">${i.status}</span></div><h1>${esc(i.name)}</h1><p class="detail-description">${esc(i.description)}</p><div class="detail-facts"><div><small>DATE</small><strong>${esc(fmt(i.date))}</strong></div><div><small>PLACE</small><strong>${esc(i.place)}</strong></div><div><small>REPORTED BY</small><strong>${esc(i.reporterName)}</strong></div></div><div class="contact-box"><div><small>CONTACT</small><strong>${esc(i.contact)}</strong></div><a class="btn btn-primary" href="mailto:${encodeURIComponent(i.contact)}?subject=Regarding your ${encodeURIComponent(i.name)} report">Contact reporter →</a></div>${i.status!=="recovered"&&i.reportedBy!==user()?.email?`<button id="claimBtn" class="btn btn-secondary full">Claim this item</button>`:""}<p id="claimMessage" class="form-message"></p></div></div>`;
+  const u=user(),isOwner=!!(u?.email&&i.reportedBy===u.email),canClaim=!!u&&!isOwner&&i.status==="active";
+  box.innerHTML=`<div class="detail-grid"><div class="detail-photo">${photo}</div><div class="detail-info"><div class="detail-top"><span class="pill ${i.type}">${i.type.toUpperCase()}</span><span class="status ${i.status}">${i.status}</span></div><h1>${esc(i.name)}</h1><p class="detail-description">${esc(i.description)}</p><div class="detail-facts"><div><small>DATE</small><strong>${esc(fmt(i.date))}</strong></div><div><small>PLACE</small><strong>${esc(i.place)}</strong></div><div><small>REPORTED BY</small><strong>${esc(i.reporterName)}</strong></div></div><div class="contact-box"><div><small>CONTACT</small><strong>${esc(i.contact)}</strong></div><a class="btn btn-primary" href="mailto:${encodeURIComponent(i.contact)}?subject=Regarding your ${encodeURIComponent(i.name)} report">Contact reporter →</a></div>${isOwner?`<a href="report.html?edit=${encodeURIComponent(i.id)}" class="btn btn-secondary full" id="editReportBtn">Edit report</a>`:canClaim?`<button id="claimBtn" class="btn btn-secondary full">Claim this item</button>`:""}<p id="claimMessage" class="form-message"></p></div></div>`;
   const cb=document.getElementById("claimBtn");
-  if(cb)cb.onclick=()=>{let claims=JSON.parse(localStorage.getItem("lf_claims")||"[]");if(claims.some(c=>c.itemId===i.id&&c.userEmail===user()?.email))return document.getElementById("claimMessage").textContent="You have already submitted a claim.";claims.push({itemId:i.id,userEmail:user().email,date:Date.now()});localStorage.setItem("lf_claims",JSON.stringify(claims));document.getElementById("claimMessage").textContent="Claim recorded locally. Contact the reporter to continue."};
+  if(cb)cb.onclick=()=>{const cur=user();if(!cur){location.href="login.html";return;}let claims=JSON.parse(localStorage.getItem("lf_claims")||"[]");if(claims.some(c=>c.itemId===i.id&&c.userEmail===cur.email))return document.getElementById("claimMessage").textContent="You have already submitted a claim.";claims.push({itemId:i.id,userEmail:cur.email,date:Date.now()});localStorage.setItem("lf_claims",JSON.stringify(claims));document.getElementById("claimMessage").textContent="Claim recorded locally. Contact the reporter to continue."};
 }
 
 async function initMine(){
@@ -198,10 +299,10 @@ async function initMine(){
   grid.innerHTML=mine.length?(await Promise.all(mine.map(i=>card(i,true)))).join(""):`<div class="empty-state"><div>+</div><h3>No reports yet</h3><p>Create your first lost or found report.</p><a href="report.html?type=lost" class="btn btn-primary">Create report</a></div>`;
   grid.onclick=async e=>{
     const b=e.target.closest("button");if(!b)return;
-    const id=b.dataset.id,items=getItems(),idx=items.findIndex(x=>x.id===id);if(idx<0)return;
+    const id=b.dataset.id,items=getItems(),currentUser=user(),idx=items.findIndex(x=>x.id===id&&x.reportedBy===currentUser?.email);if(idx<0)return;
     if(b.dataset.action==="delete"&&confirm("Delete this report?")){await deleteFile(items[idx].fileId);items.splice(idx,1);saveItems(items);initMine();}
     if(b.dataset.action==="recover"){items[idx].status="recovered";saveItems(items);initMine();}
-    if(b.dataset.action==="edit")location.href=`report.html?type=${items[idx].type}&edit=${encodeURIComponent(id)}`;
+    if(b.dataset.action==="edit")location.href=`report.html?edit=${encodeURIComponent(id)}`;
   };
 }
 
