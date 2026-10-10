@@ -10,6 +10,10 @@ const user = () => JSON.parse(localStorage.getItem("lf_currentUser") || "null");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 const fmt = d => d ? new Date(d + "T00:00:00").toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"}) : "—";
 const formatBytes = n => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+const getToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 function requireUser(){
   if(!user()){ location.href="login.html"; return false; }
@@ -111,6 +115,8 @@ function initItems(){
 function initReport(){
   if(!requireUser())return;
   const form=document.getElementById("reportForm");if(!form)return;
+  const itemDate = document.getElementById("itemDate");
+  itemDate.max = getToday();
   const params=new URLSearchParams(location.search),editId=params.get("edit"),existing=editId?getItems().find(x=>x.id===editId&&x.reportedBy===user().email):null,type=(existing?existing.type:params.get("type")==="found"?"found":"lost");
   if(editId&&!existing){location.href="my-reports.html";return;}
   document.getElementById("reportTitle").textContent=existing?`Edit your ${type} report`:`Report a ${type} item`;
@@ -142,6 +148,7 @@ function initReport(){
     if(!itemName.value.trim()||!itemDescription.value.trim()||!itemDate.value||!itemPlace.value.trim()||!itemContact.value.trim()){
       msg.textContent="Please complete all required fields.";return;
     }
+    if (itemDate.value > getToday()) { msg.textContent = "Date cannot be in the future."; return; }
     if(file&&file.size>MAX_FILE_SIZE){msg.textContent="File is too large. Maximum size is 10 MB.";return;}
     button.disabled=true;button.textContent="Publishing…";
     try{
